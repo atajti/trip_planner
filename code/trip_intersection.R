@@ -50,6 +50,12 @@ trips[, `:=`(spat_distance=sqrt(((latitude-shift(latitude))/lat_chg_per_meter)^2
                                      ((longitude-shift(longitude))/long_chg_per_meter)^2),
              time_distance=timestamp - shift(timestamp)),
         by=trip]
+
+
+# lets see what distance can we count on?
+mean(trips$spat_distance<5&trips$spat_distance>0, na.rm=TRUE)
+
+
 # what about trips on the same route, like tram or bike or walk or car on Margaret bridge?
 # search for similar trips e.g. on Nagykörút:
 ref_point <- c(latitude=47.494629, longitude=19.070960)
@@ -76,10 +82,10 @@ points(x=ref_point["longitude"],
        col="red",
        pch=4)
 
-# oh hey! just search for trips containing the starting point,
-# trips containing the endpoint,
-# create a graph and get the shortest path,
-# get time of each trip-part, then add them together.
-# see grap_routes.R
-
-
+# Ok, lets define intersections:
+# Two trip has an intersection,
+# if there's a point in one close to one in the other
+# such that their surrounding points are less close.
+trip_1 <- trips[trip == routes_around[1],]
+trip_2 <- trips[trip == routes_around[2],]
+# do an unequi-join
