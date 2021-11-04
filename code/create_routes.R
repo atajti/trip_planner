@@ -27,6 +27,7 @@ all_points[, `:=`(timestamp=as.POSIXct(timestampMs/1000,
                   uuid=uuid::UUIDgenerate(n=nrow(all_points)),
                   V1=NULL)]
 
+
 # what seems to be continuous recoding?
 timediffs <- all_points[order(timestamp), diff(timestamp)]
 # as.numeric(timediffs) removes partial seconds. I can live with that.
@@ -151,3 +152,113 @@ plot(trip_points[trip %in% c("trip_1", "trip_2", "trip_3"),
 fwrite(trip_points,
        "data/edited/trips.csv")
 # next : get trip intersections
+
+#-----------------------
+# found out that a lot of the times, gps reposts regularly,
+# but from the same position.  Lets do this analysis again
+
+lat_chg_per_meter = 8.983152840696227042251e-06 # (see get_distances.R)
+long_chg_per_meter = 1.329383083419093512941e-05 # (see get_distances.R)
+# load the data:
+library(data.table)
+# make sure bit64 pkg is installed
+all_points=fread("data/edited/bp_coords.csv")
+# data.table rolling joins will need timestamps in POSIXlt
+all_points[, `:=`(timestamp=as.POSIXct(timestampMs/1000,
+                                      origin="1970-01-01"),
+                  uuid=uuid::UUIDgenerate(n=nrow(all_points)),
+                  V1=NULL)]
+# remove points which are at the same position 
+all_points_2 <- all_points[order(timestamp)][
+                  !(latitude==shift(latitude) &
+                    latitude==shift(latitude, -1) &
+                    longitude==shift(longitude) &
+                    longitude==shift(longitude, -1)),]
+nrow(all_points_2)/nrow(all_points) # woow, massive 25% got deleted!
+rm(all_points)
+all_points <- all_points_2
+
+timediffs <- all_points[order(timestamp), diff(timestamp)]
+# as.numeric(timediffs) removes partial seconds. I can live with that.
+plot(density(as.numeric(timediffs)[timediffs<11]))
+# seems to be a clear peak at 1s, so the interval will be 2.
+continuity_tdiff <- 2
+
+all_points[, `:=`(range_before = timestamp - continuity_tdiff,
+                range_after = timestamp + continuity_tdiff)]
+
+all_segments <- all_points[all_points,
+                           on = .(timestamp<timestamp,
+                                  timestamp>range_before)][
+                !is.na(uuid) & !is.na(i.uuid)]
+# maybe search for connected_components via data.table recursively instead of igraph?
+# better: last observation carried forward?
+trip_graph <- igraph::graph_from_data_frame(all_segments[,.(uuid,i.uuid)],
+                                            directed=FALSE)
+trip_components <- igraph::components(trip_graph)
+point_trip <- data.table(uuid=igraph::V(trip_graph)$name,
+                         trip = paste0("trip_", trip_components$membership))
+trip_points <- all_points[point_trip, on=.(uuid)]
+# get time diffs between trips
+trip_points[order(timestamp),][
+            trip != shift(trip), min(diff(timestamp))]
+# 2.2 sec, great! Get a feel about how much should we strech this?
+# lets see a change in CDF
+trip_diffs <- trip_points[order(timestamp),][
+                          trip != shift(trip), diff(timestamp)]
+plot(x=1:3600,
+     y=lapply(1:3600,
+              function(cutoff){
+                mean(trip_diffs[trip_diffs>0]<cutoff)
+              }
+             )
+    )
+# now there's a clear saturation,
+# the jump is around .6
+# but the overall shape seems to be the same.
+trip_diff_cdf <- as.numeric(
+  lapply(1:3600,
+      function(cutoff){
+        mean(trip_diffs[trip_diffs>0]<cutoff)
+      }
+     )
+  )
+plot(which(trip_diff_cdf > 0.56 & trip_diff_cdf < 0.67),
+     trip_diff_cdf[which(trip_diff_cdf > 0.56 & trip_diff_cdf < 0.67)]
+     )
+plot(which(trip_diff_cdf > 0.75 & trip_diff_cdf < 0.8),
+     trip_diff_cdf[which(trip_diff_cdf > 0.75 & trip_diff_cdf < 0.8)]
+     )
+trip_cdf[600]
+# yeah, lets cut again az 600, that's 78% of the points
+continuity_tdiff <- 601
+
+all_points[, `:=`(range_before = timestamp - continuity_tdiff,
+                range_after = timestamp + continuity_tdiff)]
+
+all_segments <- all_points[all_points,
+                           on = .(timestamp<timestamp,
+                                  timestamp>range_before)][
+                !is.na(uuid) & !is.na(i.uuid)]
+
+trip_graph <- igraph::graph_from_data_frame(all_segments[,.(uuid,i.uuid)],
+                                            directed=FALSE)
+trip_components <- igraph::components(trip_graph)
+# 16146 trips instead of 14000 trips, seems ok: more subtrips, but not that muck more
+# also 622000 points instead of 828000, matches the 75%
+point_trip <- data.table(uuid=igraph::V(trip_graph)$name,
+                         trip = paste0("trip_", trip_components$membership))
+trip_points <- all_points[point_trip, on=.(uuid)]
+# get time diffs between trips
+trip_points[order(timestamp),][
+            trip != shift(trip), min(diff(timestamp))]
+View(trip_points[trip %in% c("trip_1", "trip_2", "trip_3")])
+plot(trip_points[trip %in% c("trip_1", "trip_2", "trip_3"),
+                 longitude],
+     trip_points[trip %in% c("trip_1", "trip_2", "trip_3"),
+                 latitude],
+     col=trip_points[trip %in% c("trip_1", "trip_2", "trip_3"),
+                     as.numeric(gsub("[a-z_]", "", trip))])
+#those seem to be distinct trips.
+fwrite(trip_points,
+       "data/edited/trips_2.csv")
