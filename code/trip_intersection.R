@@ -47,7 +47,8 @@ trips[,`:=`(inbp=NULL,
 trips[, `:=`(spat_distance=sqrt(((latitude-shift(latitude))/lat_chg_per_meter)^2 +
                                      ((longitude-shift(longitude))/long_chg_per_meter)^2),
              time_distance=timestamp - shift(timestamp),
-             direction=atan((latitude-shift(latitude))/(longitude-shift(longitude)))),
+             direction=atan((latitude-shift(latitude))/(longitude-shift(longitude))),
+             trip_nr=as.integer(gsub("trip_", "", trip, fixed=TRUE))),
         by=trip]
 
 
@@ -106,20 +107,188 @@ radius=50 # (100m difference between two points)
 # non-equi merge:
 # intersection is a point, where there's an A point in radius
 # relative to B, but A's neigbours are not in B's neighbours radius
-
 trips[,
-  `:=`(prev_max_lat=,
-       prev_min_lat=,
-       prev_max_long=,
-       prev_min_long=,
-       next_max_lat=,
-       next_min_lat=,
-       next_max_long=,
-       next_min_long=,)
-  by = trip]
+      `:=`(max_lat=latitude+lat_chg_per_meter*radius,
+           min_lat=latitude-lat_chg_per_meter*radius,
+           max_long=longitude+long_chg_per_meter*radius,
+           min_long=longitude-long_chg_per_meter*radius)][,
+      `:=`(prev_max_lat=shift(max_lat),
+           prev_min_lat=shift(min_lat),
+           prev_max_long=shift(max_long),
+           prev_min_long=shift(min_long),
+           prev_lat=shift(latitude),
+           prev_long=shift(longitude),
+           next_max_lat=shift(max_lat, n=-1),
+           next_min_lat=shift(min_lat, n=-1),
+           next_max_long=shift(max_long, n=-1),
+           next_min_long=shift(min_long, n=-1),
+           next_lat=shift(latitude, n=-1),
+           next_long=shift(longitude, n=-1)),
+      by = trip]
+
+
+trip_pairings <- expand.grid(trip1=unique(trips$trip_nr),
+                          trip2=unique(trips$trip_nr))
+trip_pairings <- setDT(trip_pairings)[trip1<trip2] # this is ok because of the fixed radius
+
+#-- test the intersecion point logic:
+# what about trips on the same route, like tram or bike or walk or car on Margaret bridge?
+# search for similar trips e.g. on Nagykörút:
+ref_point <- c(latitude=47.494629, longitude=19.070960)
+get_nearest_points <- function(data, point,
+                   max_distance=50#,
+                   # max_number_of_points=50
+                   ){
+  return(
+    data[
+      data$latitude<=point["latitude"]+(max_distance*lat_chg_per_meter) &
+      data$latitude>=point["latitude"]-(max_distance*lat_chg_per_meter) &
+      data$longitude<=point["longitude"]+(max_distance*long_chg_per_meter) &
+      data$longitude>=point["longitude"]-(max_distance*long_chg_per_meter),
+      ])
+}
+
+routes_around <- unique(get_nearest_points(trips, ref_point)$trip)
+intersecting_trip_1  <- routes_around[3]
+intersecting_trip_2  <- routes_around[4]
+plot(trips[trip %in% c(intersecting_trip_1, intersecting_trip_2),
+           longitude],
+     trips[trip %in% c(intersecting_trip_1, intersecting_trip_2), latitude],
+     col=c("blue", "orange", "green", "black", "magenta")[trips[trip %in% c(intersecting_trip_1, intersecting_trip_2), as.integer(as.factor(trip))]])
+# these are intersecting at 2 points but run paralel on Nagykörút
+trip_1 <- trips[trip == intersecting_trip_1,
+                .(longitude_1=longitude,
+                  latitude_1=latitude,
+                  max_lat_1=max_lat,
+                  min_lat_1=min_lat,
+                  max_long_1=max_long,
+                  min_long_1=min_long,
+                  trip,
+                  uuid_1=uuid)] 
+trip_2 <- trips[trip==intersecting_trip_2,
+                .(longitude_2=longitude,
+                  latitude_2=latitude,
+                  latitude,
+                  longitude,
+                  trip,
+                  uuid_2=uuid)]
+
+intersections <- trip_1[trip_2,
+                        on=.(max_lat_1 > latitude,
+                             min_lat_1 < latitude,
+                             max_long_1 > longitude,
+                             min_long_1 < longitude)][
+                        !is.na(longitude_2) & !is.na(latitude_2) &
+                        !is.na(longitude_1) & !is.na(latitude_1)]
+plot(trips[trip %in% c(intersecting_trip_1, intersecting_trip_2),
+           longitude],
+     trips[trip %in% c(intersecting_trip_1, intersecting_trip_2), latitude],
+     col=c("blue", "orange")[trips[trip %in% c(intersecting_trip_1, intersecting_trip_2), as.integer(as.factor(trip))]])
+points(intersections$longitude_1,
+       intersections$latitude_2,
+       col="red",
+       pch=4)
+
+str(intersections)
+# Seems to work reasonably.
+# Try to get the 4 distinct intersections
+# get components:
+library(igraph)
+intersection_g <- graph_from_data_frame(intersections[, .(uuid_1, uuid_2)],
+                                        directed=FALSE)
+intersection_comps <- components(intersection_g)
+uuid_intersection <- data.table(uuid=V(intersection_g)$name,
+                               intersection=paste0("intersection_",
+                                                   intersection_comps$membership))
+mean_intersection_points <- uuid_intersection[trips[trip %in% c(intersecting_trip_1, intersecting_trip_2)],
+                                              .(uuid, intersection,
+                                                longitude, latitude),
+                                              on=.(uuid)][!is.na(intersection),
+                                              .(latitude=mean(latitude),
+                                                longitude=mean(longitude)),
+                                              by=intersection]
+plot(mean_intersection_points$longitude,
+     mean_intersection_points$latitude)
+# Create a function from it
+# and wrap its end up with one dt with lat, long, trip_id.
+find_intersections <- function(trip_1, trip_2,
+                               radius=50){
+  # trips are data.tables with uuid, longitude, latitude
+  # if trips does not contain max and min latitude and longitude,
+  # those are computed with radius
+  setnames(trip_1,
+           c("longitude", "latitude", "uuid"),
+           c("longitude_1","latitude_1", "uuid_1"))
+  if(!all(c("min_latitude", "max_latitude",
+           "min_longitude", "max_latitude") %in%
+         names(trip_1))){
+    trip_1[,
+           `:=`(max_latitude  = latitude_1+lat_chg_per_meter*radius,
+                min_latitude  = latitude_1-lat_chg_per_meter*radius,
+                max_longitude = longitude_1+long_chg_per_meter*radius,
+                min_longitude = longitude_1-long_chg_per_meter*radius)]
+  }
+  trip_2[, `:=`(longitude_2 = longitude,
+                latitude_2 = latitude,
+                uuid_2 = uuid)]
+  intersections <- trip_1[trip_2,
+                          on=.(max_latitude > latitude,
+                               min_latitude < latitude,
+                               max_longitude > longitude,
+                               min_longitude < longitude)][
+                          !is.na(longitude_2) & !is.na(latitude_2) &
+                          !is.na(longitude_1) & !is.na(latitude_1)]
+  intersection_g <- igraph::graph_from_data_frame(intersections[, .(uuid_1, uuid_2)],
+                                          directed=FALSE)
+  intersection_comps <- igraph::components(intersection_g)
+  uuid_intersection <- data.table(uuid=igraph::V(intersection_g)$name,
+                                 intersection=paste0("intersection_",
+                                                     intersection_comps$membership))
+  mean_intersection_points <- uuid_intersection[rbindlist(list(trip_1[,.(uuid=uuid_1,
+                                                                         longitude=longitude_1,
+                                                                         latitude=latitude_1)],
+                                                               trip_2[,.(uuid=uuid_2,
+                                                                         longitude=longitude_2,
+                                                                         latitude=latitude_2)])),
+                                                .(uuid, intersection,
+                                                  longitude, latitude),
+                                                on=.(uuid)][!is.na(intersection),
+                                                .(latitude=mean(latitude),
+                                                  longitude=mean(longitude)),
+                                                by=intersection]
+  return(mean_intersection_points)
+}
+ints <- find_intersections(trips[trip=="trip_528"],
+                           trips[trip=="trip_1679"])
+
+plot(trips[trip %in% c("trip_528","trip_1679"),
+           longitude],
+     trips[trip %in% c("trip_528","trip_1679"), latitude],
+     col=c("blue", "orange")[trips[trip %in% c("trip_528","trip_1679"), as.integer(as.factor(trip))]],
+     main = "intersections of different trips")
+points(ints$longitude,
+       ints$latitude,
+       col="red",
+       pch=4)
+
+
+ints_2 <- find_intersections(trips[trip=="trip_528"],
+                           trips[trip=="trip_528"])
+plot(trips[trip %in% c("trip_528","trip_1679"),
+           longitude],
+     trips[trip %in% c("trip_528","trip_1679"), latitude],
+     col=c("blue", "orange")[trips[trip %in% c("trip_528","trip_1679"), as.integer(as.factor(trip))]],
+     main = "intersections of parallel trips")
+points(ints_2$longitude,
+       ints_2$latitude,
+       col="red",
+       pch=4)
+
+
+
 # At the start and end poins new columns are NA
 # assign values manually: imagine the next/previous point
-# in the same/opposite direction and the same distance
+# in the same/opposite direction and the same distance.
 
 
 
@@ -142,7 +311,8 @@ get_nearest_points <- function(data, point,
 }
 
 routes_around <- unique(get_nearest_points(trips, ref_point)$trip)
-View(trips[trip %in% routes_around[1:4]][order(timestamp)])
+View(trips[trip %in% routes_around[1:4]][order(timestamp),
+     .(latitude, longitude, timestamp, trip)])
 plot(trips[trip %in% routes_around[1:4], longitude],
      trips[trip %in% routes_around[1:4], latitude],
      col=c("blue", "orange", "green", "black", "magenta")[trips[trip %in% routes_around[1:4], as.integer(as.factor(trip))]])
