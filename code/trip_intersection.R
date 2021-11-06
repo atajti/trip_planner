@@ -127,10 +127,6 @@ trips[,
       by = trip]
 
 
-trip_pairings <- expand.grid(trip1=unique(trips$trip_nr),
-                          trip2=unique(trips$trip_nr))
-trip_pairings <- setDT(trip_pairings)[trip1<trip2] # this is ok because of the fixed radius
-
 #-- test the intersecion point logic:
 # what about trips on the same route, like tram or bike or walk or car on Margaret bridge?
 # search for similar trips e.g. on Nagykörút:
@@ -216,6 +212,12 @@ find_intersections <- function(trip_1, trip_2,
   # trips are data.tables with uuid, longitude, latitude
   # if trips does not contain max and min latitude and longitude,
   # those are computed with radius
+  #if(all.equal(trip_1, trip_2)){
+  #  stop("It's the same route twice!")
+  #}
+  trip_1 <- copy(trip_1)
+  trip_2 <- copy(trip_2)
+  # I do this to reduce sid efefcts, also trips should not be really large tables
   setnames(trip_1,
            c("longitude", "latitude", "uuid"),
            c("longitude_1","latitude_1", "uuid_1"))
@@ -231,13 +233,31 @@ find_intersections <- function(trip_1, trip_2,
   trip_2[, `:=`(longitude_2 = longitude,
                 latitude_2 = latitude,
                 uuid_2 = uuid)]
-  intersections <- trip_1[trip_2,
+  if(!all(c("min_latitude", "max_latitude",
+           "min_longitude", "max_latitude") %in%
+         names(trip_2))){
+    trip_2[,
+           `:=`(max_latitude  = latitude_2+lat_chg_per_meter*radius,
+                min_latitude  = latitude_2-lat_chg_per_meter*radius,
+                max_longitude = longitude_2+long_chg_per_meter*radius,
+                min_longitude = longitude_2-long_chg_per_meter*radius)]
+  }
+  intersections <- rbindlist(list(trip_1[trip_2,
                           on=.(max_latitude > latitude,
                                min_latitude < latitude,
                                max_longitude > longitude,
-                               min_longitude < longitude)][
+                               min_longitude < longitude)]# ,
+                                 #trip_2[trip_1, #This is if distance is not fixed
+                          # on=.(max_latitude > latitude_1,
+                               # min_latitude < latitude_1,
+                               # max_longitude > longitude_1,
+                               # min_longitude < longitude_1)]
+                               ))[
                           !is.na(longitude_2) & !is.na(latitude_2) &
                           !is.na(longitude_1) & !is.na(latitude_1)]
+  if(nrow(intersections)==0){
+    return(NULL)
+  }
   intersection_g <- igraph::graph_from_data_frame(intersections[, .(uuid_1, uuid_2)],
                                           directed=FALSE)
   intersection_comps <- igraph::components(intersection_g)
@@ -284,7 +304,36 @@ points(ints_2$longitude,
        col="red",
        pch=4)
 
+# get longest route, get timing with it.
+longest_trip <- trips[, .(length=.N), by=trip][length==max(length), trip] 
+trip_l <- trips[trip==longest_trip]
+system.time(find_intersections(trip_l, trip_l)) # <15s.
 
+# plan:
+# create all intersection for route pairs
+# find cluster of intersections
+# check if there are some intersections
+# that can be scrapped
+trip_pairings <- expand.grid(trip1=unique(trips$trip_nr),
+                          trip2=unique(trips$trip_nr))
+trip_pairings <- setDT(trip_pairings)[trip1<trip2] # this is ok because of the fixed radius
+gc()
+
+system.time( 
+trippair_intersections <- lapply(
+  1:nrow(trip_pairings),
+  function(i){
+    trip1 <- paste0("trip_", trip_pairings[i,"trip1"])
+    trip2 <- paste0("trip_", trip_pairings[i,"trip2"])
+    if(!i%%10000){
+      print(paste(Sys.time(),
+                  trip1, trip2,
+                  (i/nrow(trip_pairings)*100)))
+    }
+    return(find_intersections(trips[trip==trip1,],
+                              trips[trip==trip2,]))
+                       })
+)
 
 # At the start and end poins new columns are NA
 # assign values manually: imagine the next/previous point
