@@ -315,32 +315,44 @@ longest_trip <- trips[, .(length=.N), by=trip][length==max(length), trip]
 trip_l <- trips[trip==longest_trip]
 system.time(find_intersections(trip_l, trip_l)) # <15s.
 
-# plan:
-# create all intersection for route pairs
-# find cluster of intersections
-# check if there are some intersections
-# that can be scrapped
-trip_pairings <- expand.grid(trip1=unique(trips$trip_nr),
-                          trip2=unique(trips$trip_nr))
-trip_pairings <- setDT(trip_pairings)[trip1<trip2] # this is ok because of the fixed radius
-gc()
+# plan (still brute force):
+# find close trips to each point
+get_nearest_points <- function(data, point,
+                   max_distance=50#,
+                   # max_number_of_points=50
+                   ){
+  return(
+    data[
+      data$latitude<=point["latitude"]+(max_distance*lat_chg_per_meter) &
+      data$latitude>=point["latitude"]-(max_distance*lat_chg_per_meter) &
+      data$longitude<=point["longitude"]+(max_distance*long_chg_per_meter) &
+      data$longitude>=point["longitude"]-(max_distance*long_chg_per_meter),
+      ])
+}
+find_close_trips <- function(data, point){
+  get_nearest_points(data, point)[, (unique(trip))]
+}
 
-system.time( 
-trippair_intersections <- lapply(
-  1:nrow(trip_pairings),
-  function(i){
-    trip1 <- paste0("trip_", trip_pairings[i,"trip1"])
-    trip2 <- paste0("trip_", trip_pairings[i,"trip2"])
-    if(!i%%10000){
-      gc()
-      print(paste(Sys.time(),
-                  trip1, trip2,
-                  (i/nrow(trip_pairings)*100)))
-    }
-    return(find_intersections(trips[trip==trip1,],
-                              trips[trip==trip2,]))
-                       })
-)
+unique_points  <- unique(trips[, .(uuid, longitude, latitude, trip)])
+close_trips <- mapply(function(lat, long){
+                        get_nearest_points(trips, c(latitude=lat, longitude=long))[, unique(trip)]
+                        },
+                      unique_points$latitude,
+                      unique_points$longitude)
+gc()
+names(close_trips) <- unique_points$uuid
+saveRDS(close_trips,
+     "data/edited/close_trip_list.RDS")
+fwrite(trips,
+       "data/edited/trips_3.csv")
+
+
+#---------------------------------------------------------#
+#                                                         #
+#
+#                                                         #
+#---------------------------------------------------------#
+
 
 # At the start and end poins new columns are NA
 # assign values manually: imagine the next/previous point
