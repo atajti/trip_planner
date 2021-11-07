@@ -215,6 +215,12 @@ find_intersections <- function(trip_1, trip_2,
   #if(all.equal(trip_1, trip_2)){
   #  stop("It's the same route twice!")
   #}
+  if(max(trip_1$longitude)<min(trip_2$longitude) | # 1 is west to 2
+     max(trip_2$longitude)<min(trip_1$longitude) | # 2 is west to 1
+     max(trip_1$latitude)<min(trip_2$latitude) | # 1 is south to 2
+     max(trip_2$latitude)<min(trip_1$latitude)){ # 2 is south to 1
+    return(NULL)
+  }
   trip_1 <- copy(trip_1)
   trip_2 <- copy(trip_2)
   # I do this to reduce sid efefcts, also trips should not be really large tables
@@ -326,6 +332,7 @@ trippair_intersections <- lapply(
     trip1 <- paste0("trip_", trip_pairings[i,"trip1"])
     trip2 <- paste0("trip_", trip_pairings[i,"trip2"])
     if(!i%%10000){
+      gc()
       print(paste(Sys.time(),
                   trip1, trip2,
                   (i/nrow(trip_pairings)*100)))
