@@ -333,6 +333,7 @@ find_close_trips <- function(data, point){
   get_nearest_points(data, point)[, (unique(trip))]
 }
 
+# this takes several hours and 16Gigs RAM, but works
 unique_points  <- unique(trips[, .(uuid, longitude, latitude, trip)])
 close_trips <- mapply(function(lat, long){
                         get_nearest_points(trips, c(latitude=lat, longitude=long))[, unique(trip)]
@@ -349,10 +350,41 @@ fwrite(trips,
 
 #---------------------------------------------------------#
 #                                                         #
-#
+#      Intersection points from route intersections       #
 #                                                         #
 #---------------------------------------------------------#
 
+library(data.table)
+
+trips <- fread("data/edited/trips_3.csv")
+close_trips <- readRDS("data/edited/close_trip_list.RDS")[trips[, uuid]]
+# not parallel routes (only colse to a point, not to its neghbours)
+# 2 hours long task!
+close_trips_diff <- sapply(2:(length(close_trips)-1),
+                           function(i){
+                                setdiff(close_trips[i],
+                                        intersect(close_trips[i-1],
+                                                  close_trips[i+1]))
+                            },
+                           simplify=FALSE,
+                           USE.NAMES=TRUE)
+for(i in 2:(length(close_trips)-1)){
+  if(length(close_trips_diff[[i-1]])>0){
+    names(close_trips_diff[[i-1]]) <- names(close_trips)[i]
+  }
+}
+close_trips_diff <- unlist(close_trips_diff, recursive=FALSE)
+close_trips_diff[[names(close_trips)[1]]] <- close_trips[[1]]
+close_trips_diff[[names(close_trips)[length(close_trips)]]] <- close_trips[[length(close_trips)]]
+saveRDS(close_trips_diff,
+        "/data/edited/intersecting_trips.RDS")
+
+trips[, real_intersections := setdiff(
+                                setdiff(close_trips,
+                                        intersect(shift(close_trips),
+                                                  shift(trip, -1))),
+                                trip),
+      by=trip]
 
 # At the start and end poins new columns are NA
 # assign values manually: imagine the next/previous point
