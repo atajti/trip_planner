@@ -385,33 +385,32 @@ saveRDS(close_trips_diff,
 #            (not just intersecting trips)                #
 #---------------------------------------------------------#
 
-
+lat_chg_per_meter = 8.983152840696227042251e-06 # (see get_distances.R)
+long_chg_per_meter = 1.329383083419093512941e-05 # (see get_distances.R)
+radius=50
 library(data.table)
+library(dbscan)
 
-trip_intersection_data <- readRDS("data/edited/intersecting_trips.RDS")
-# create a {trip: points} list
-# then for each trip, get all unique trips from intersection data
+intersection_points <- names(readRDS("data/edited/intersecting_trips.RDS"))
 trips <- fread("data/edited/trips_3.csv",
-               select=c("uuid", "trip"))
+               select=c("uuid", "longitude", "latitude"))
+# a degree change oin longitude is not the same as in latitude
+# so first normalize coordinates, then compute dist, then cluster them
 
-
-get_intersecting_trip <- function(trip_to_check){
-  if(length(trip_to_check)>1){
-    stop(paste("trip is:", trip_to_check))
-  }
-  unique(unlist(trip_intersection_data[trips[trip==trip_to_check, uuid]]))
-}
-# 20  min long task
-trip_pairs <- trips[,
-                    .(trip2 = get_intersecting_trip(trip)),
-                    by=trip]
-trip_pairs_2 <- unique(trip_pairs[trip<trip2,])
-# this is still 27 million pairs :(
-fwrite(trip_pairs_2,
-       "data/edited/trip_pairings.csv")
-
-
-
+int_points  <- trips[uuid %in% intersection_points,
+                     .(uuid, latitude, longitude)]
+fwrite(int_points,
+  "data/edited/points_in_intersections.csv")
+int_points <- fread("data/edited/points_in_intersections.csv")
+# get ballpark value for scaled lat and long:
+norm_lat_chng <- lat_chg_per_meter/int_points[, sd(latitude)]
+norm_long_chng <- long_chg_per_meter/int_points[, sd(longitude)]
+#make eps the diagonal of a radius*lat x radius*long square
+dense_points <- dbscan(int_points[, .(lat=scale(latitude),
+                                      long=scale(longitude))],
+                       eps=sqrt((radius*norm_lat_chng)^2+
+                                (radius*norm_long_chng)^2),
+                       minPts=3)
 
 
 
