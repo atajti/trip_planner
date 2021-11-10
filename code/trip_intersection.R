@@ -377,18 +377,41 @@ close_trips_diff <- unlist(close_trips_diff, recursive=FALSE)
 close_trips_diff[[names(close_trips)[1]]] <- close_trips[[1]]
 close_trips_diff[[names(close_trips)[length(close_trips)]]] <- close_trips[[length(close_trips)]]
 saveRDS(close_trips_diff,
-        "/data/edited/intersecting_trips.RDS")
+        "data/edited/intersecting_trips.RDS")
 
-trips[, real_intersections := setdiff(
-                                setdiff(close_trips,
-                                        intersect(shift(close_trips),
-                                                  shift(trip, -1))),
-                                trip),
-      by=trip]
+#---------------------------------------------------------#
+#                                                         #
+#       Finding intersection ponts themselves             #
+#            (not just intersecting trips)                #
+#---------------------------------------------------------#
 
-# At the start and end poins new columns are NA
-# assign values manually: imagine the next/previous point
-# in the same/opposite direction and the same distance.
+
+library(data.table)
+
+trip_intersection_data <- readRDS("data/edited/intersecting_trips.RDS")
+# create a {trip: points} list
+# then for each trip, get all unique trips from intersection data
+trips <- fread("data/edited/trips_3.csv",
+               select=c("uuid", "trip"))
+
+
+get_intersecting_trip <- function(trip_to_check){
+  if(length(trip_to_check)>1){
+    stop(paste("trip is:", trip_to_check))
+  }
+  unique(unlist(trip_intersection_data[trips[trip==trip_to_check, uuid]]))
+}
+# 20  min long task
+trip_pairs <- trips[,
+                    .(trip2 = get_intersecting_trip(trip)),
+                    by=trip]
+trip_pairs_2 <- unique(trip_pairs[trip<trip2,])
+# this is still 27 million pairs :(
+fwrite(trip_pairs_2,
+       "data/edited/trip_pairings.csv")
+
+
+
 
 
 
