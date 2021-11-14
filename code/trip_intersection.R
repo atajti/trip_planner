@@ -333,20 +333,43 @@ find_close_trips <- function(data, point){
   get_nearest_points(data, point)[, (unique(trip))]
 }
 
-# this takes several hours and 16Gigs RAM, but works
+#---------------------------------------------------------#
+#                                                         #
+#                      Trip Pairings                      #
+# this takes several hours and 16Gigs RAM, but works      #
+#---------------------------------------------------------# 
+
+get_nearest_points <- function(data, point,
+                   max_distance=10#,
+                   # max_number_of_points=50
+                   ){
+  return(
+    data[
+      data$latitude<=point["latitude"]+(max_distance*lat_chg_per_meter) &
+      data$latitude>=point["latitude"]-(max_distance*lat_chg_per_meter) &
+      data$longitude<=point["longitude"]+(max_distance*long_chg_per_meter) &
+      data$longitude>=point["longitude"]-(max_distance*long_chg_per_meter),
+      ])
+}
+
+
+library(data.table)
+trips  <- fread("data/edited/trips_3.csv")
+lat_chg_per_meter = 8.983152840696227042251e-06 # (see get_distances.R)
+long_chg_per_meter = 1.329383083419093512941e-05 # (see get_distances.R)
+
 unique_points  <- unique(trips[, .(uuid, longitude, latitude, trip)])
+system.time(
 close_trips <- mapply(function(lat, long){
                         get_nearest_points(trips, c(latitude=lat, longitude=long))[, unique(trip)]
                         },
                       unique_points$latitude,
                       unique_points$longitude)
+)
 gc()
 names(close_trips) <- unique_points$uuid
 saveRDS(close_trips,
-     "data/edited/close_trip_list.RDS")
-fwrite(trips,
-       "data/edited/trips_3.csv")
-
+     "data/edited/close_trip_list_short.RDS")
 
 #---------------------------------------------------------#
 #                                                         #
@@ -377,7 +400,7 @@ close_trips_diff <- unlist(close_trips_diff, recursive=FALSE)
 close_trips_diff[[names(close_trips)[1]]] <- close_trips[[1]]
 close_trips_diff[[names(close_trips)[length(close_trips)]]] <- close_trips[[length(close_trips)]]
 saveRDS(close_trips_diff,
-        "data/edited/intersecting_trips.RDS")
+        "data/edited/intersecting_trips_short.RDS")
 
 #---------------------------------------------------------#
 #                                                         #
