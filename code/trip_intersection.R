@@ -380,26 +380,48 @@ saveRDS(close_trips,
 library(data.table)
 
 trips <- fread("data/edited/trips_3.csv")
-close_trips <- readRDS("data/edited/close_trip_list.RDS")[trips[, uuid]]
+close_trips <- readRDS("data/edited/close_trip_list_short.RDS")[trips[, uuid]]
 # not parallel routes (only colse to a point, not to its neghbours)
-# 2 hours long task!
-close_trips_diff <- sapply(2:(length(close_trips)-1),
+# 3 hours long task!
+neighbours_to_check=10
+system.time(
+close_trips_diff <- sapply(neighbours_to_check:(length(close_trips)-neighbours_to_check),
                            function(i){
-                                setdiff(close_trips[i],
-                                        intersect(close_trips[i-1],
-                                                  close_trips[i+1]))
+                                setdiff(close_trips[[i]],
+                                        union(unlist(close_trips[(i-1):(i-neighbours_to_check)]),
+                                              unlist(close_trips[(i+1):(i+neighbours_to_check)])))
                             },
                            simplify=FALSE,
                            USE.NAMES=TRUE)
-for(i in 2:(length(close_trips)-1)){
-  if(length(close_trips_diff[[i-1]])>0){
-    names(close_trips_diff[[i-1]]) <- names(close_trips)[i]
-  }
-}
-close_trips_diff <- unlist(close_trips_diff, recursive=FALSE)
-close_trips_diff[[names(close_trips)[1]]] <- close_trips[[1]]
-close_trips_diff[[names(close_trips)[length(close_trips)]]] <- close_trips[[length(close_trips)]]
-saveRDS(close_trips_diff,
+)
+names(close_trips_diff) <- names(close_trips)[neighbours_to_check:(length(close_trips)-neighbours_to_check)]
+
+close_trips_diff_begin <- sapply(1:neighbours_to_check,
+                           function(i){
+                                setdiff(close_trips[[i]],
+                                        union(unlist(close_trips[(i-1):1]),
+                                              unlist(close_trips[(i+1):(i+neighbours_to_check)])))
+                            },
+                           simplify=FALSE,
+                           USE.NAMES=TRUE)
+names(close_trips_diff_begin) <- names(close_trips)[1:neighbours_to_check]
+
+close_trips_diff_end <- sapply((length(close_trips)-neighbours_to_check):length(close_trips),
+                           function(i){
+                                setdiff(close_trips[[i]],
+                                        union(unlist(close_trips[(i-1):(i-neighbours_to_check)]),
+                                              unlist(close_trips[(i+1):length(close_trips)])))
+                            },
+                           simplify=FALSE,
+                           USE.NAMES=TRUE)
+
+names(close_trips_diff_end) <- names(close_trips)[(length(close_trips)-neighbours_to_check):length(close_trips)]
+
+remain_from_begin <- setdiff(names(close_trips_diff_begin), names(close_trips_diff))
+remain_from_end <- setdiff(names(close_trips_diff_end), names(close_trips_diff))
+
+
+saveRDS(c(close_trips_diff_begin, close_trips_diff, close_trips_diff_end),
         "data/edited/intersecting_trips_short.RDS")
 
 #---------------------------------------------------------#
@@ -411,7 +433,8 @@ saveRDS(close_trips_diff,
 
 library(data.table)
 
-trip_intersection_data <- readRDS("data/edited/intersecting_trips.RDS")
+close_trips_diff <- readRDS("data/edited/intersecting_trips_short.RDS")
+trip_intersection_data <- close_trips_diff[which(sapply(close_trips_diff, function(x){length(x)!=0}))]
 # create a {trip: points} list
 # then for each trip, get all unique trips from intersection data
 trips <- fread("data/edited/trips_3.csv",
@@ -431,7 +454,7 @@ trip_pairs <- trips[,
 trip_pairs_2 <- unique(trip_pairs[trip<trip2,])
 # this is still 27 million pairs :(
 fwrite(trip_pairs_2,
-       "data/edited/trip_pairings.csv")
+       "data/edited/trip_pairings_short.csv")
 
 
 #---------------------------------------------------------#
@@ -525,18 +548,20 @@ long_chg_per_meter = 1.329383083419093512941e-05 # (see get_distances.R)
 trips = trips <- fread("data/edited/trips_3.csv",
                select=c("uuid", "trip", "longitude", "latitude"))
 
-trip_pairings <- fread("data/edited/trip_pairings.csv")
+trip_pairings <- fread("data/edited/trip_pairings_short.csv")
 setnames(trip_pairings, "trip", "trip1")
 
 
 
 system.time( # its about an hour
-Y <- rbindlist(lapply(1:100000,
+Y <- rbindlist(lapply(1:10000,
        function(i){
          find_intersections(trips[trip==trip_pairings[i, trip1]],
                             trips[trip==trip_pairings[i, trip2]])
          }))
 )
+
+plot(Y$longitude, Y$latitude)
 
 # what about trips on the same route, like tram or bike or walk or car on Margaret bridge?
 # search for similar trips e.g. on Nagykörút:
