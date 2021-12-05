@@ -262,3 +262,44 @@ plot(trip_points[trip %in% c("trip_1", "trip_2", "trip_3"),
 #those seem to be distinct trips.
 fwrite(trip_points,
        "data/edited/trips_2.csv")
+
+
+#-------------------------------#
+#                               #
+#     Remove 0-dstance trips    #
+#                               #
+#-------------------------------#
+
+tripwise_mean_distances <- trip_points[order(timestamp),
+  .(mean_dist=mean(sqrt(((latitude-shift(latitude))/lat_chg_per_meter)^2 +
+                        ((longitude-shift(longitude))/long_chg_per_meter)^2),
+                   na.rm=TRUE),
+    min_dist=min(sqrt(((latitude-shift(latitude))/lat_chg_per_meter)^2 +
+                        ((longitude-shift(longitude))/long_chg_per_meter)^2),
+                   na.rm=TRUE),
+    q25=quantile(sqrt(((latitude-shift(latitude))/lat_chg_per_meter)^2 +
+                        ((longitude-shift(longitude))/long_chg_per_meter)^2),
+                 probs=.25,
+                 na.rm=TRUE),
+    q5=quantile(sqrt(((latitude-shift(latitude))/lat_chg_per_meter)^2 +
+                        ((longitude-shift(longitude))/long_chg_per_meter)^2),
+                 probs=.5,
+                 na.rm=TRUE)),
+  by=trip]
+
+trip_points_2 <- trip_points[!(trip %in% tripwise_mean_distances[mean_dist==0, trip]),]
+
+trips <- trip_points_2
+trips[,`:=`(inbp=NULL,
+            distance=NULL,
+            range_before=NULL,
+            range_after=NULL)]
+trips[, `:=`(spat_distance=sqrt(((latitude-shift(latitude))/lat_chg_per_meter)^2 +
+                                     ((longitude-shift(longitude))/long_chg_per_meter)^2),
+             time_distance=timestamp - shift(timestamp),
+             direction=atan((latitude-shift(latitude))/(longitude-shift(longitude))),
+             trip_nr=as.integer(gsub("trip_", "", trip, fixed=TRUE))),
+        by=trip]
+
+fwrite(trips,
+       "data/edited/trips_3.csv")
