@@ -106,6 +106,8 @@ labs(title="Distance between close point of different trips, when ordered by lon
 #                                                         #
 #---------------------------------------------------------#
 
+library(ggplot2)
+
 unique_points <- trips[,.(.SD,
                           coordstring=paste0(latitudeE7,
                                              longitudeE7))][,
@@ -132,6 +134,44 @@ ggplot(data=trip_touch_points,
 geom_point(col="black", fill="black", alpha=.05)+
 labs(title = "Points on multiple trips",
      subtitle = "Emphasises regular places and walking routes")
+
+
+# create intersection ids, then "replace" uuids with them
+
+is_graph <- igraph::graph_from_data_frame(trip_touch[,.(uuid,i.uuid)],
+                                          directed=FALSE)
+is_components <- igraph::components(is_graph)
+point_is <- data.table(uuid=igraph::V(is_graph)$name,
+                       is = paste0("intersection_", is_components$membership))
+is_points <- trips[point_is, on=.(uuid)]
+
+
+ggplot(data=is_points[, .(int_points = .N), by = is]) +
+stat_ecdf(aes(x=int_points)) +
+labs(title = "Number of points in an intersection",
+     y = "% of intersections with less points than x",
+     x = "Number of points in the intersections",
+     subtitle = paste(length(unique(is_points$is)),
+                      "intersection is created from",
+                      nrow(is_points),
+                      "points."))
+
+trips2 <- is_points[, .(uuid, is)][trips, on=.(uuid)]
+trips2[, c(sum(!is.na(is)), length(unique(is)))] # quick check on intersection and point numbers
+trips2[, single_id := uuid][!is.na(is), single_id=is]
+
+
+
+fwrite(trips2[order(timestamp),],
+       "data/edited/trips_intersections.csv")
+
+#---------------------------------------------------------#
+#                                                         #
+#     Create graph for path search in graph_routes.R      #
+#                                                         #
+#---------------------------------------------------------#
+
+
 
 
 ######
